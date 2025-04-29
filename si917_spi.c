@@ -187,26 +187,109 @@ static void spi_net_process_arp(struct net_device *dev, const unsigned char *dat
     neigh_release(n);
 }
 /* 수신 데이터 처리 함수 */
-static void spi_net_receive_packet(struct spi_net_priv *priv) {
+// static void spi_net_receive_packet(struct spi_net_priv *priv) {
+//     struct net_device *dev = priv->net_dev;
+//     struct sk_buff *skb;
+//     unsigned char *data;
+//     int len;
+
+//     /* 패킷 길이 디코딩 - 프로토콜에 맞게 조정 필요 */
+//     if (priv->rx_buffer[SI917_SPI_MARGINE+12] == 0x08 && priv->rx_buffer[SI917_SPI_MARGINE+13] == 0x00) {
+//         len = priv->rx_buffer[SI917_SPI_MARGINE+16];
+//         len *= 256;
+//         len += priv->rx_buffer[SI917_SPI_MARGINE+17];
+//         len += 14;
+//     }
+
+//     // pr_info("recv len : %d\n", len);
+    
+//     // for(i=0; i<len+16+14; i++) {
+//     //     pr_info("0x%02x ", priv->rx_buffer[i]);
+//     // }
+//     // pr_info("\n");
+
+//     if (priv->rx_buffer[SI917_SPI_MARGINE+12] == 0x08 && priv->rx_buffer[SI917_SPI_MARGINE+13] == 0x06) {
+//         len = 28;
+//         skb = dev_alloc_skb(len + NET_IP_ALIGN);
+//         if (!skb) {
+//             dev->stats.rx_dropped++;
+//             return;
+//         }
+
+//         skb_reserve(skb, NET_IP_ALIGN);
+//         data = skb_put(skb, len);
+
+//         memcpy(data, &priv->rx_buffer[SI917_SPI_MARGINE+14], len);
+//         memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE-SI917_SPI_MARGINE);
+
+//         spi_net_process_arp(dev, data, len);
+//         // pr_info("arp set\n");
+
+//         return;
+//     }
+ 
+//     /* 버퍼 크기 및 MTU 제한 확인 */
+//     if (len > SPI_MAX_BUF_SIZE-SI917_SPI_MARGINE || len > dev->mtu) {
+//         dev->stats.rx_dropped++;
+//         return;
+//     }
+    
+//     skb = dev_alloc_skb(len + NET_IP_ALIGN);
+//     if (!skb) {
+//         dev->stats.rx_dropped++;
+//         return;
+//     }
+
+//     skb_reserve(skb, NET_IP_ALIGN);
+//     data = skb_put(skb, len);
+//     memcpy(data, &priv->rx_buffer[SI917_SPI_MARGINE], len);
+//     memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE-SI917_SPI_MARGINE);
+    
+//     /* 네트워크 메타데이터 설정 */
+//     skb->dev = dev;
+//     skb->protocol = eth_type_trans(skb, dev);
+//     skb->ip_summed = CHECKSUM_NONE;
+    
+//     if (skb->protocol == htons(ETH_P_ARP)) {
+//         spi_net_process_arp(dev, data, len);
+//         // pr_info("arp set\n");
+//     }
+
+//     /* 통계 업데이트 */
+//     dev->stats.rx_packets++;
+//     dev->stats.rx_bytes += len;
+    
+//     /* 네트워크 스택으로 패킷 전달 */
+//     netif_rx(skb);
+// }
+
+
+#define MAX_PACKET_SIZE     2048
+
+static unsigned char rx_partial_buf[MAX_PACKET_SIZE];
+static int rx_partial_len = 0;
+static int rx_large_len = 0;
+
+static void spi_net_receive_packet2(struct spi_net_priv *priv) {
     struct net_device *dev = priv->net_dev;
     struct sk_buff *skb;
     unsigned char *data;
-    int len;
+    int len = 0;
 
-    /* 패킷 길이 디코딩 - 프로토콜에 맞게 조정 필요 */
-    len = priv->rx_buffer[SI917_SPI_MARGINE+16];
-    len *= 256;
-    len += priv->rx_buffer[SI917_SPI_MARGINE+17];
-    len += 14;
+    // int i = 0;
 
-    // pr_info("recv len : %d\n", len);
-    
-    // for(i=0; i<len+16+14; i++) {
-    //     pr_info("0x%02x ", priv->rx_buffer[i]);
-    // }
-    // pr_info("\n");
+    /* 프로토콜 확인 및 길이 파싱 */
+    if (priv->rx_buffer[SI917_SPI_MARGINE+12] == 0x08 &&
+        priv->rx_buffer[SI917_SPI_MARGINE+13] == 0x00) {
+        len = priv->rx_buffer[SI917_SPI_MARGINE+16] << 8 |
+              priv->rx_buffer[SI917_SPI_MARGINE+17];
+        len += 14;  // Ethernet header
+        
+    }
 
-    if (priv->rx_buffer[SI917_SPI_MARGINE+12] == 0x08 && priv->rx_buffer[SI917_SPI_MARGINE+13] == 0x06) {
+    /* ARP 패킷 */
+    if (priv->rx_buffer[SI917_SPI_MARGINE+12] == 0x08 &&
+        priv->rx_buffer[SI917_SPI_MARGINE+13] == 0x06) {
         len = 28;
         skb = dev_alloc_skb(len + NET_IP_ALIGN);
         if (!skb) {
@@ -218,20 +301,79 @@ static void spi_net_receive_packet(struct spi_net_priv *priv) {
         data = skb_put(skb, len);
 
         memcpy(data, &priv->rx_buffer[SI917_SPI_MARGINE+14], len);
-        memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE-SI917_SPI_MARGINE);
+        memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE);
 
         spi_net_process_arp(dev, data, len);
-        // pr_info("arp set\n");
+        return;
+    }
 
+    // if (priv->rx_buffer[SI917_SPI_MARGINE+14+20+8+4] == 0x21 &&
+    //     priv->rx_buffer[SI917_SPI_MARGINE+14+20+8+5] == 0x12 &&
+    //     priv->rx_buffer[SI917_SPI_MARGINE+14+20+8+6] == 0xa4 &&
+    //     priv->rx_buffer[SI917_SPI_MARGINE+14+20+8+7] == 0x42) {
+    //     pr_info("****************************STUN RECV!!******************************\n");
+    //     for(i=0;i<len;i++) {
+    //         pr_info("0x%02x ", priv->rx_buffer[SI917_SPI_MARGINE+i]);
+    //     }
+    //     pr_info("\n");
+    // }
+
+    // pr_info("recv:%d\n", len);
+    /* 조각 수신 처리 */
+    if (len > SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE || rx_partial_len != 0) {
+        if (rx_partial_len == 0) {
+            // pr_info("large pck state1\n");
+            // 첫 번째 조각 저장
+            memcpy(rx_partial_buf, &priv->rx_buffer[SI917_SPI_MARGINE], SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE);
+            rx_partial_len = SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE;
+            rx_large_len = len;
+        } else {
+            
+            // 두 번째 조각 수신 및 결합
+            int second_part_len = rx_large_len - rx_partial_len;
+            if (rx_partial_len + second_part_len > MAX_PACKET_SIZE) {
+                dev->stats.rx_dropped++;
+                rx_partial_len = 0;
+                return;
+            }
+            // pr_info("large pck state2 : %d\n", second_part_len);
+            memcpy(rx_partial_buf + rx_partial_len, &priv->rx_buffer[SI917_SPI_MARGINE], second_part_len);
+            rx_partial_len += second_part_len;
+
+            // pr_info("0x%02x 0x%02x 0x%02x 0x%02x 0x%02x\n", rx_partial_buf[rx_partial_len-5], rx_partial_buf[rx_partial_len-4], rx_partial_buf[rx_partial_len-3], rx_partial_buf[rx_partial_len-2], rx_partial_buf[rx_partial_len-1]);
+
+            skb = dev_alloc_skb(rx_partial_len + NET_IP_ALIGN);
+            if (!skb) {
+                dev->stats.rx_dropped++;
+                rx_partial_len = 0;
+                return;
+            }
+
+            skb_reserve(skb, NET_IP_ALIGN);
+            data = skb_put(skb, rx_partial_len);
+            memcpy(data, rx_partial_buf, rx_partial_len);
+            memset(rx_partial_buf, 0, MAX_PACKET_SIZE);
+            rx_partial_len = 0;
+
+            skb->dev = dev;
+            skb->protocol = eth_type_trans(skb, dev);
+            skb->ip_summed = CHECKSUM_NONE;
+
+            if (skb->protocol == htons(ETH_P_ARP)) {
+                spi_net_process_arp(dev, data, rx_partial_len);
+            }
+
+            dev->stats.rx_packets++;
+            dev->stats.rx_bytes += rx_partial_len;
+
+            netif_rx(skb);
+        }
+
+        memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE);
         return;
     }
- 
-    /* 버퍼 크기 및 MTU 제한 확인 */
-    if (len > SPI_MAX_BUF_SIZE-SI917_SPI_MARGINE || len > dev->mtu) {
-        dev->stats.rx_dropped++;
-        return;
-    }
-    
+
+    /* 일반 처리 */
     skb = dev_alloc_skb(len + NET_IP_ALIGN);
     if (!skb) {
         dev->stats.rx_dropped++;
@@ -241,25 +383,21 @@ static void spi_net_receive_packet(struct spi_net_priv *priv) {
     skb_reserve(skb, NET_IP_ALIGN);
     data = skb_put(skb, len);
     memcpy(data, &priv->rx_buffer[SI917_SPI_MARGINE], len);
-    memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE-SI917_SPI_MARGINE);
-    
-    /* 네트워크 메타데이터 설정 */
+    memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE);
+
     skb->dev = dev;
     skb->protocol = eth_type_trans(skb, dev);
     skb->ip_summed = CHECKSUM_NONE;
-    
+
     if (skb->protocol == htons(ETH_P_ARP)) {
         spi_net_process_arp(dev, data, len);
-        // pr_info("arp set\n");
     }
 
-    /* 통계 업데이트 */
     dev->stats.rx_packets++;
     dev->stats.rx_bytes += len;
-    
-    /* 네트워크 스택으로 패킷 전달 */
     netif_rx(skb);
 }
+
 
 extern int spi_sync(struct spi_device *spi, struct spi_message *message);
 
@@ -286,6 +424,8 @@ static int spi_thread_fn(void *data) {
                 // if (wait) usleep_range(300, 500);
             }
 
+           
+
             mutex_lock(&priv->spi_lock);
             memset(&t, 0, sizeof(t));
             t.tx_buf = priv->tx_buf[priv->r_cnt];
@@ -307,7 +447,7 @@ static int spi_thread_fn(void *data) {
             if (priv->rx_cnt > 0) {
                 // pr_info("r%d w%d rx:%d\n", priv->r_cnt, priv->w_cnt, priv->rx_cnt);
                 mutex_lock(&priv->net_lock);
-                spi_net_receive_packet(priv);
+                spi_net_receive_packet2(priv);
                 mutex_unlock(&priv->net_lock);
                 priv->rx_cnt--;
             }
@@ -359,6 +499,7 @@ static netdev_tx_t spi_net_xmit(struct sk_buff *skb, struct net_device *dev) {
     struct spi_net_priv *priv = netdev_priv(dev);
     struct spi_device *spi = priv->spi_dev;
     int data_cnt = 0;
+    // int i;
 
     if (!spi) {
         pr_err("SPI device not initialized\n");
@@ -387,6 +528,29 @@ static netdev_tx_t spi_net_xmit(struct sk_buff *skb, struct net_device *dev) {
     if (data_cnt < (SPI_BUF_NUM-1) && priv->w_cnt < (SPI_BUF_NUM-1)) {
         memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
         memcpy(priv->tx_buf[priv->w_cnt], skb->data, skb->len);
+
+        pr_info("dst ip:%d.%d.%d.%d\n", priv->tx_buf[priv->r_cnt][30],         \
+                                    priv->tx_buf[priv->r_cnt][31],      \
+                                    priv->tx_buf[priv->r_cnt][32],      \
+                                    priv->tx_buf[priv->r_cnt][33]);
+        pr_info("dst mac:%02x:%02x:%02x:%02x:%02x:%02x\n", priv->tx_buf[priv->r_cnt][0],    \
+                                                    priv->tx_buf[priv->r_cnt][1],   \
+                                                    priv->tx_buf[priv->r_cnt][2],   \
+                                                    priv->tx_buf[priv->r_cnt][3],   \
+                                                    priv->tx_buf[priv->r_cnt][4],   \
+                                                    priv->tx_buf[priv->r_cnt][5]);
+        pr_info("src ip:%d.%d.%d.%d\n", priv->tx_buf[priv->r_cnt][30-4],       \
+                                    priv->tx_buf[priv->r_cnt][30-3],    \
+                                    priv->tx_buf[priv->r_cnt][30-2],    \
+                                    priv->tx_buf[priv->r_cnt][30-1]);
+        pr_info("src mac:%02x:%02x:%02x:%02x:%02x:%02x\n", priv->tx_buf[priv->r_cnt][6],    \
+                                                    priv->tx_buf[priv->r_cnt][7],   \
+                                                    priv->tx_buf[priv->r_cnt][8],   \
+                                                    priv->tx_buf[priv->r_cnt][9],   \
+                                                    priv->tx_buf[priv->r_cnt][10],   \
+                                                    priv->tx_buf[priv->r_cnt][11]);
+        pr_info("Send Len:%d\n", skb->len);
+
         // queue_work(priv->twq, &priv->tx_work);
         priv->w_cnt++;
 
