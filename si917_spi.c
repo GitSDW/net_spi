@@ -318,11 +318,11 @@ static void spi_net_receive_packet2(struct spi_net_priv *priv) {
     //     pr_info("\n");
     // }
 
-    // pr_info("recv:%d\n", len);
+    // pr_info("rx:%d\n", len);
     /* 조각 수신 처리 */
     if (len > SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE || rx_partial_len != 0) {
         if (rx_partial_len == 0) {
-            // pr_info("large pck state1\n");
+            // pr_info("lpckt:%d\n",len);
             // 첫 번째 조각 저장
             memcpy(rx_partial_buf, &priv->rx_buffer[SI917_SPI_MARGINE], SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE);
             rx_partial_len = SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE;
@@ -423,8 +423,6 @@ static int spi_thread_fn(void *data) {
                 ret = gpio_get_value(SI917_IRQ_GPIO);
                 // if (wait) usleep_range(300, 500);
             }
-
-           
 
             mutex_lock(&priv->spi_lock);
             memset(&t, 0, sizeof(t));
@@ -529,28 +527,6 @@ static netdev_tx_t spi_net_xmit(struct sk_buff *skb, struct net_device *dev) {
         memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
         memcpy(priv->tx_buf[priv->w_cnt], skb->data, skb->len);
 
-        pr_info("dst ip:%d.%d.%d.%d\n", priv->tx_buf[priv->r_cnt][30],         \
-                                    priv->tx_buf[priv->r_cnt][31],      \
-                                    priv->tx_buf[priv->r_cnt][32],      \
-                                    priv->tx_buf[priv->r_cnt][33]);
-        pr_info("dst mac:%02x:%02x:%02x:%02x:%02x:%02x\n", priv->tx_buf[priv->r_cnt][0],    \
-                                                    priv->tx_buf[priv->r_cnt][1],   \
-                                                    priv->tx_buf[priv->r_cnt][2],   \
-                                                    priv->tx_buf[priv->r_cnt][3],   \
-                                                    priv->tx_buf[priv->r_cnt][4],   \
-                                                    priv->tx_buf[priv->r_cnt][5]);
-        pr_info("src ip:%d.%d.%d.%d\n", priv->tx_buf[priv->r_cnt][30-4],       \
-                                    priv->tx_buf[priv->r_cnt][30-3],    \
-                                    priv->tx_buf[priv->r_cnt][30-2],    \
-                                    priv->tx_buf[priv->r_cnt][30-1]);
-        pr_info("src mac:%02x:%02x:%02x:%02x:%02x:%02x\n", priv->tx_buf[priv->r_cnt][6],    \
-                                                    priv->tx_buf[priv->r_cnt][7],   \
-                                                    priv->tx_buf[priv->r_cnt][8],   \
-                                                    priv->tx_buf[priv->r_cnt][9],   \
-                                                    priv->tx_buf[priv->r_cnt][10],   \
-                                                    priv->tx_buf[priv->r_cnt][11]);
-        pr_info("Send Len:%d\n", skb->len);
-
         // queue_work(priv->twq, &priv->tx_work);
         priv->w_cnt++;
 
@@ -561,6 +537,7 @@ static netdev_tx_t spi_net_xmit(struct sk_buff *skb, struct net_device *dev) {
         
         dev->stats.tx_packets++;
         dev->stats.tx_bytes += skb->len;
+        // pr_info("tx:%d\n", skb->len);
     }
     else {
         priv->spi_pending = true;
@@ -717,9 +694,78 @@ static int spi_net_probe(struct spi_device *spi) {
     priv->rx_cnt = 0;
 
     spi_set_drvdata(spi, priv);
-    pr_info("SPI network device registered (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
+    pr_info("SPI network device registered 20250512 (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
     return 0;
 }
+
+
+// static int spi_net_probe(struct spi_device *spi)
+// {
+//     struct net_device *net_dev;
+//     struct spi_net_priv *priv;
+//     int i;
+
+//     // "wlan%d" 이름으로 인터페이스 생성
+//     net_dev = alloc_netdev(sizeof(struct spi_net_priv), "wlan%d", NET_NAME_UNKNOWN, ether_setup);
+//     if (!net_dev)
+//         return -ENOMEM;
+
+//     // 인터페이스 이름을 강제로 wlan0으로 설정
+//     strlcpy(net_dev->name, "wlan0", IFNAMSIZ);
+
+//     priv = netdev_priv(net_dev);
+//     priv->net_dev = net_dev;
+//     priv->spi_dev = spi;
+//     mutex_init(&priv->spi_lock);
+//     mutex_init(&priv->net_lock);
+
+//     priv->rx_buffer = kmalloc(SPI_MAX_BUF_SIZE, GFP_KERNEL);
+//     if (!priv->rx_buffer) {
+//         free_netdev(net_dev);
+//         return -ENOMEM;
+//     }
+
+//     net_dev->netdev_ops = &spi_netdev_ops;
+//     net_dev->flags &= ~IFF_NOARP;
+//     net_dev->mtu = 992;
+
+//     if (register_netdev(net_dev)) {
+//         kfree(priv->rx_buffer);
+//         free_netdev(net_dev);
+//         return -EIO;
+//     }
+
+//     for (i = 0; i < SPI_BUF_NUM; i++) {
+//         priv->tx_buf[i] = kmalloc(SPI_MAX_BUF_SIZE, GFP_KERNEL);
+//         if (!priv->tx_buf[i]) {
+//             while (--i >= 0)
+//                 kfree(priv->tx_buf[i]);
+//             kfree(priv->rx_buffer);
+//             unregister_netdev(net_dev);
+//             free_netdev(net_dev);
+//             return -ENOMEM;
+//         }
+//     }
+
+//     tx_test = kmalloc(SPI_MAX_BUF_SIZE, GFP_KERNEL);
+//     if (tx_test) {
+//         for (i = 0; i < SPI_MAX_BUF_SIZE; i++) {
+//             tx_test[i] = i % 256;
+//         }
+//     }
+
+//     priv->r_cnt = 0;
+//     priv->w_cnt = 0;
+//     priv->rx_cnt = 0;
+
+//     spi_set_drvdata(spi, priv);
+
+//     pr_info("SPI network device registered as '%s' (buffer size: %d bytes)\n",
+//             net_dev->name, SPI_MAX_BUF_SIZE);
+
+//     return 0;
+// }
+
 
 static int spi_net_remove(struct spi_device *spi) {
     struct spi_net_priv *priv = spi_get_drvdata(spi);
