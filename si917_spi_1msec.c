@@ -285,12 +285,8 @@ static void spi_net_receive_packet2(struct spi_net_priv *priv) {
         len = priv->rx_buffer[SI917_SPI_MARGINE+16] << 8 |
               priv->rx_buffer[SI917_SPI_MARGINE+17];
         len += 14;  // Ethernet header
-        // pr_info("IPv4:%d", len);        
+        
     }
-    // else {
-        // pr_info("type:0x%02x 0x%02x", priv->rx_buffer[SI917_SPI_MARGINE+12], priv->rx_buffer[SI917_SPI_MARGINE+13]);        
-    // }
-
 
     /* ARP 패킷 */
     if (priv->rx_buffer[SI917_SPI_MARGINE+12] == 0x08 &&
@@ -379,30 +375,28 @@ static void spi_net_receive_packet2(struct spi_net_priv *priv) {
     }
 
     /* 일반 처리 */
-    if (len !=0) {
-        skb = dev_alloc_skb(len + NET_IP_ALIGN);
-        if (!skb) {
-            dev->stats.rx_dropped++;
-            return;
-        }
-
-        skb_reserve(skb, NET_IP_ALIGN);
-        data = skb_put(skb, len);
-        memcpy(data, &priv->rx_buffer[SI917_SPI_MARGINE], len);
-        memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE);
-
-        skb->dev = dev;
-        skb->protocol = eth_type_trans(skb, dev);
-        skb->ip_summed = CHECKSUM_NONE;
-
-        if (skb->protocol == htons(ETH_P_ARP)) {
-            spi_net_process_arp(dev, data, len);
-        }
-
-        dev->stats.rx_packets++;
-        dev->stats.rx_bytes += len;
-        netif_rx(skb);
+    skb = dev_alloc_skb(len + NET_IP_ALIGN);
+    if (!skb) {
+        dev->stats.rx_dropped++;
+        return;
     }
+
+    skb_reserve(skb, NET_IP_ALIGN);
+    data = skb_put(skb, len);
+    memcpy(data, &priv->rx_buffer[SI917_SPI_MARGINE], len);
+    memset(priv->rx_buffer, 0, SPI_MAX_BUF_SIZE - SI917_SPI_MARGINE);
+
+    skb->dev = dev;
+    skb->protocol = eth_type_trans(skb, dev);
+    skb->ip_summed = CHECKSUM_NONE;
+
+    if (skb->protocol == htons(ETH_P_ARP)) {
+        spi_net_process_arp(dev, data, len);
+    }
+
+    dev->stats.rx_packets++;
+    dev->stats.rx_bytes += len;
+    netif_rx(skb);
 }
 
 
@@ -414,41 +408,39 @@ static int spi_thread_fn(void *data) {
     struct spi_message m;
     int ret, wait;
     unsigned char *spi_buf = kmalloc(SPI_MAX_BUF_SIZE, GFP_KERNEL);
-    // bool send_flag = false;
+    int y_cnt = 0;
+
 
     // pr_info("priv:%p\n", priv);
 
-    while (!kthread_should_stop()) {
-        wait_event_interruptible(priv->spi_wait, priv->spi_pending || kthread_should_stop());
-        if (kthread_should_stop())
-            break;
+    // while (!kthread_should_stop()) {
+    while (1) {
+        // wait_event_interruptible(priv->spi_wait, priv->spi_pending || kthread_should_stop());
+        // if (kthread_should_stop())
+        //     break;
 
-        priv->spi_pending = false;
+        // priv->spi_pending = false;
 
-        wait = gpio_get_value(SI917_IRQ_GPIO);
-        // pr_info("thread start!! %d %d %d", priv->r_cnt, priv->w_cnt, wait);
-        while ((priv->r_cnt < priv->w_cnt) || wait) {
-            // wait = ret = 0;
+        // while (priv->r_cnt < priv->w_cnt) {
+            // wait = ret = 1;
             // while(wait || ret) {
             //     wait = gpio_get_value(SI917_WAIT_GPIO);
             //     ret = gpio_get_value(SI917_IRQ_GPIO);
             //     // if (wait) usleep_range(300, 500);
             // }
-            
-            if (priv->r_cnt < priv->w_cnt) {
+            usleep_range(100, 200);
+            memset(spi_buf, 0, SPI_MAX_BUF_SIZE);
+            if (priv->r_cnt < priv->w_cnt){
                 memcpy(spi_buf, priv->tx_buf[priv->r_cnt], SPI_MAX_BUF_SIZE);
                 priv->r_cnt++;
-
-                if (priv->r_cnt >= priv->w_cnt) priv->r_cnt = priv->w_cnt = 0;
-                // send_flag = true;
-            }
-            else {
-                memset(spi_buf, 0, SPI_MAX_BUF_SIZE);
+                if (priv->r_cnt >= priv->w_cnt)
+                    priv->r_cnt = priv->w_cnt = 0;
+                // pr_info("y %d", y_cnt++);
             }
 
-            mutex_lock(&priv->spi_lock);
+            usleep_range(100, 200);
+
             memset(&t, 0, sizeof(t));
-            // t.tx_buf = priv->tx_buf[priv->r_cnt];
             t.tx_buf = spi_buf;
             t.rx_buf = priv->rx_buffer;
             t.len = SPI_MAX_BUF_SIZE;
@@ -457,63 +449,50 @@ static int spi_thread_fn(void *data) {
             spi_message_add_tail(&t, &m);
 
             ret = spi_sync(priv->spi_dev, &m);
-            mutex_unlock(&priv->spi_lock); 
 
             if (ret < 0)
                 pr_err("SPI TX failed\n");
 
-            // priv->r_cnt++;
-
-            // pr_info("r%d w%d rx:%d\n", priv->r_cnt, priv->w_cnt, priv->rx_cnt);
             // if (priv->rx_cnt > 0) {
-
-            // pr_info("wait:%d", wait);
-            if (wait) {
-                // mutex_lock(&priv->net_lock);
+                // pr_info("r%d w%d rx:%d\n", priv->r_cnt, priv->w_cnt, priv->rx_cnt);
+                mutex_lock(&priv->net_lock);
                 spi_net_receive_packet2(priv);
-                // mutex_unlock(&priv->net_lock);
+                mutex_unlock(&priv->net_lock);
                 // priv->rx_cnt--;
-            }
-
-            // if (send_flag) {
-                // pr_info("TX:0x%02x 0x%02x\n", spi_buf[0], spi_buf[1]);
-                // send_flag = false;
             // }
-            usleep_range(800, 900);
-            wait = gpio_get_value(SI917_IRQ_GPIO);
+
+            usleep_range(300, 400);
         }
 
-        priv->r_cnt = priv->w_cnt = 0;
+        
 
         if (priv->r_cnt > SPI_BUF_NUM || priv->w_cnt > SPI_BUF_NUM) {
             priv->r_cnt = priv->w_cnt = 0;
         }
-    }
+    // }
     return 0;
 }
 
 /* IRQ 핸들러 */
-static irqreturn_t spi_net_irq_handler(int irq, void *dev_id) {
-    struct spi_net_priv *priv = dev_id;
-    // int data_cnt;
+// static irqreturn_t spi_net_irq_handler(int irq, void *dev_id) {
+//     struct spi_net_priv *priv = dev_id;
+//     int data_cnt;
 
-    // priv->rx_cnt++;
-    // data_cnt = priv->w_cnt - priv->r_cnt;
+//     priv->rx_cnt++;
+//     data_cnt = priv->w_cnt - priv->r_cnt;
 
-    // if (data_cnt > 1) return IRQ_HANDLED;
+//     if (data_cnt > 1) return IRQ_HANDLED;
  
-    // if (priv->w_cnt < SPI_BUF_NUM-1) {
-        // memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
-        // priv->w_cnt++;
-    // }
+//     if (priv->w_cnt < SPI_BUF_NUM-1) {
+//         memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
+//         priv->w_cnt++;
+//     }
 
-    // pr_info("rb trigger");
+//     priv->spi_pending = true;
+//     wake_up_interruptible(&priv->spi_wait);
 
-    priv->spi_pending = true;
-    wake_up_interruptible(&priv->spi_wait);
-
-    return IRQ_HANDLED;
-}
+//     return IRQ_HANDLED;
+// }
 
 static int spi_net_set_mac_address(struct net_device *dev, void *p) {
     struct sockaddr *addr = p;
@@ -530,6 +509,7 @@ static netdev_tx_t spi_net_xmit(struct sk_buff *skb, struct net_device *dev) {
     struct spi_device *spi = priv->spi_dev;
     int data_cnt = 0;
     // int i;
+    static int x_cnt = 0;
 
     if (!spi) {
         pr_err("SPI device not initialized\n");
@@ -560,10 +540,11 @@ static netdev_tx_t spi_net_xmit(struct sk_buff *skb, struct net_device *dev) {
         memcpy(priv->tx_buf[priv->w_cnt], skb->data, skb->len);
 
         // queue_work(priv->twq, &priv->tx_work);
+        // pr_info("x %d", x_cnt++);
         priv->w_cnt++;
-
-        priv->spi_pending = true;
-        wake_up_interruptible(&priv->spi_wait);
+        // priv->spi_pending = true;
+        // wake_up_interruptible(&priv->spi_wait);
+        
 
         // pr_info("w_cnt :%d r_cnt:%d\n", priv->w_cnt, priv->r_cnt);
         
@@ -589,22 +570,22 @@ static int spi_net_open(struct net_device *dev) {
     int ret, i;
 
     /* Set Rx IRQ GPIO */
-    if (!gpio_is_valid(SI917_IRQ_GPIO)) {
-        pr_err("Invalid GPIO %d\n", SI917_IRQ_GPIO);
-        return -ENODEV;
-    }
-    ret = gpio_direction_input(SI917_IRQ_GPIO);
-    if (ret) {
-        pr_err("Failed to set GPIO %d as input\n", SI917_IRQ_GPIO);
-        gpio_free(SI917_IRQ_GPIO);
-        return ret;
-    }
-    ret = gpio_request(SI917_IRQ_GPIO, "spi_net_irq");
-    if (ret) {
-        pr_err("Failed to request GPIO %d\n", SI917_IRQ_GPIO);
-        return ret;
-    }
-    priv->irq = gpio_to_irq(SI917_IRQ_GPIO);
+    // if (!gpio_is_valid(SI917_IRQ_GPIO)) {
+    //     pr_err("Invalid GPIO %d\n", SI917_IRQ_GPIO);
+    //     return -ENODEV;
+    // }
+    // ret = gpio_direction_input(SI917_IRQ_GPIO);
+    // if (ret) {
+    //     pr_err("Failed to set GPIO %d as input\n", SI917_IRQ_GPIO);
+    //     gpio_free(SI917_IRQ_GPIO);
+    //     return ret;
+    // }
+    // ret = gpio_request(SI917_IRQ_GPIO, "spi_net_irq");
+    // if (ret) {
+    //     pr_err("Failed to request GPIO %d\n", SI917_IRQ_GPIO);
+    //     return ret;
+    // }
+    // priv->irq = gpio_to_irq(SI917_IRQ_GPIO);
 
     /* Set SPI Start Enable GPIO */
     // if (!gpio_is_valid(SI917_WAIT_GPIO)) {
@@ -631,13 +612,13 @@ static int spi_net_open(struct net_device *dev) {
     }
 
     /* 인터럽트 핸들러 등록 */
-    ret = request_irq(priv->irq, spi_net_irq_handler, 
-                     IRQF_TRIGGER_RISING, "spi_net_irq", priv);
-    if (ret) {
-        pr_err("Failed to request IRQ %d\n", priv->irq);
-        gpio_free(SI917_IRQ_GPIO);
-        return ret;
-    }
+    // ret = request_irq(priv->irq, spi_net_irq_handler, 
+    //                  IRQF_TRIGGER_FALLING, "spi_net_irq", priv);
+    // if (ret) {
+    //     pr_err("Failed to request IRQ %d\n", priv->irq);
+    //     gpio_free(SI917_IRQ_GPIO);
+    //     return ret;
+    // }
 
     /* Net Start */
     netif_start_queue(dev);
@@ -647,12 +628,6 @@ static int spi_net_open(struct net_device *dev) {
         memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
         priv->w_cnt++;
         // pr_info("Start Dummy Set!\n");
-    }
-
-    ret = gpio_get_value(SI917_IRQ_GPIO);
-    if (ret) {
-         priv->spi_pending = true;
-        wake_up_interruptible(&priv->spi_wait);
     }
 
     return 0;
@@ -740,7 +715,7 @@ static int spi_net_probe(struct spi_device *spi) {
     priv->rx_cnt = 0;
 
     spi_set_drvdata(spi, priv);
-    pr_info("SPI network device registered 20250601 (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
+    pr_info("SPI network device registered 20250512 (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
     return 0;
 }
 

@@ -414,7 +414,6 @@ static int spi_thread_fn(void *data) {
     struct spi_message m;
     int ret, wait;
     unsigned char *spi_buf = kmalloc(SPI_MAX_BUF_SIZE, GFP_KERNEL);
-    // bool send_flag = false;
 
     // pr_info("priv:%p\n", priv);
 
@@ -425,26 +424,18 @@ static int spi_thread_fn(void *data) {
 
         priv->spi_pending = false;
 
-        wait = gpio_get_value(SI917_IRQ_GPIO);
-        // pr_info("thread start!! %d %d %d", priv->r_cnt, priv->w_cnt, wait);
-        while ((priv->r_cnt < priv->w_cnt) || wait) {
-            // wait = ret = 0;
-            // while(wait || ret) {
-            //     wait = gpio_get_value(SI917_WAIT_GPIO);
-            //     ret = gpio_get_value(SI917_IRQ_GPIO);
-            //     // if (wait) usleep_range(300, 500);
-            // }
-            
-            if (priv->r_cnt < priv->w_cnt) {
-                memcpy(spi_buf, priv->tx_buf[priv->r_cnt], SPI_MAX_BUF_SIZE);
-                priv->r_cnt++;
+        while (priv->r_cnt < priv->w_cnt) {
+            wait = ret = 1;
+            while(wait || ret) {
+                wait = gpio_get_value(SI917_WAIT_GPIO);
+                ret = gpio_get_value(SI917_IRQ_GPIO);
+                // if (wait) usleep_range(300, 500);
+            }
 
-                if (priv->r_cnt >= priv->w_cnt) priv->r_cnt = priv->w_cnt = 0;
-                // send_flag = true;
-            }
-            else {
-                memset(spi_buf, 0, SPI_MAX_BUF_SIZE);
-            }
+            memcpy(spi_buf, priv->tx_buf[priv->r_cnt], SPI_MAX_BUF_SIZE);
+            priv->r_cnt++;
+
+            if (priv->r_cnt >= priv->w_cnt) priv->r_cnt = priv->w_cnt = 0;
 
             mutex_lock(&priv->spi_lock);
             memset(&t, 0, sizeof(t));
@@ -457,7 +448,7 @@ static int spi_thread_fn(void *data) {
             spi_message_add_tail(&t, &m);
 
             ret = spi_sync(priv->spi_dev, &m);
-            mutex_unlock(&priv->spi_lock); 
+            mutex_unlock(&priv->spi_lock);
 
             if (ret < 0)
                 pr_err("SPI TX failed\n");
@@ -465,22 +456,14 @@ static int spi_thread_fn(void *data) {
             // priv->r_cnt++;
 
             // pr_info("r%d w%d rx:%d\n", priv->r_cnt, priv->w_cnt, priv->rx_cnt);
-            // if (priv->rx_cnt > 0) {
-
-            // pr_info("wait:%d", wait);
-            if (wait) {
-                // mutex_lock(&priv->net_lock);
+            if (priv->rx_cnt > 0) {
+                mutex_lock(&priv->net_lock);
                 spi_net_receive_packet2(priv);
-                // mutex_unlock(&priv->net_lock);
-                // priv->rx_cnt--;
+                mutex_unlock(&priv->net_lock);
+                priv->rx_cnt--;
             }
 
-            // if (send_flag) {
-                // pr_info("TX:0x%02x 0x%02x\n", spi_buf[0], spi_buf[1]);
-                // send_flag = false;
-            // }
-            usleep_range(800, 900);
-            wait = gpio_get_value(SI917_IRQ_GPIO);
+            usleep_range(300, 500);
         }
 
         priv->r_cnt = priv->w_cnt = 0;
@@ -495,19 +478,17 @@ static int spi_thread_fn(void *data) {
 /* IRQ 핸들러 */
 static irqreturn_t spi_net_irq_handler(int irq, void *dev_id) {
     struct spi_net_priv *priv = dev_id;
-    // int data_cnt;
+    int data_cnt;
 
-    // priv->rx_cnt++;
-    // data_cnt = priv->w_cnt - priv->r_cnt;
+    priv->rx_cnt++;
+    data_cnt = priv->w_cnt - priv->r_cnt;
 
-    // if (data_cnt > 1) return IRQ_HANDLED;
+    if (data_cnt > 1) return IRQ_HANDLED;
  
-    // if (priv->w_cnt < SPI_BUF_NUM-1) {
-        // memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
-        // priv->w_cnt++;
-    // }
-
-    // pr_info("rb trigger");
+    if (priv->w_cnt < SPI_BUF_NUM-1) {
+        memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
+        priv->w_cnt++;
+    }
 
     priv->spi_pending = true;
     wake_up_interruptible(&priv->spi_wait);
@@ -607,16 +588,16 @@ static int spi_net_open(struct net_device *dev) {
     priv->irq = gpio_to_irq(SI917_IRQ_GPIO);
 
     /* Set SPI Start Enable GPIO */
-    // if (!gpio_is_valid(SI917_WAIT_GPIO)) {
-    //     pr_err("Invalid GPIO %d\n", SI917_WAIT_GPIO);
-    //     return -ENODEV;
-    // }
-    // ret = gpio_direction_input(SI917_WAIT_GPIO);
-    // if (ret) {
-    //     pr_err("Failed to set GPIO %d as input\n", SI917_WAIT_GPIO);
-    //     gpio_free(SI917_WAIT_GPIO);
-    //     return ret;
-    // }
+    if (!gpio_is_valid(SI917_WAIT_GPIO)) {
+        pr_err("Invalid GPIO %d\n", SI917_WAIT_GPIO);
+        return -ENODEV;
+    }
+    ret = gpio_direction_input(SI917_WAIT_GPIO);
+    if (ret) {
+        pr_err("Failed to set GPIO %d as input\n", SI917_WAIT_GPIO);
+        gpio_free(SI917_WAIT_GPIO);
+        return ret;
+    }
 
     /* SPI Thread */
     init_waitqueue_head(&priv->spi_wait);
@@ -632,7 +613,7 @@ static int spi_net_open(struct net_device *dev) {
 
     /* 인터럽트 핸들러 등록 */
     ret = request_irq(priv->irq, spi_net_irq_handler, 
-                     IRQF_TRIGGER_RISING, "spi_net_irq", priv);
+                     IRQF_TRIGGER_FALLING, "spi_net_irq", priv);
     if (ret) {
         pr_err("Failed to request IRQ %d\n", priv->irq);
         gpio_free(SI917_IRQ_GPIO);
@@ -647,12 +628,6 @@ static int spi_net_open(struct net_device *dev) {
         memset(priv->tx_buf[priv->w_cnt], 0, SPI_MAX_BUF_SIZE);
         priv->w_cnt++;
         // pr_info("Start Dummy Set!\n");
-    }
-
-    ret = gpio_get_value(SI917_IRQ_GPIO);
-    if (ret) {
-         priv->spi_pending = true;
-        wake_up_interruptible(&priv->spi_wait);
     }
 
     return 0;
@@ -740,7 +715,7 @@ static int spi_net_probe(struct spi_device *spi) {
     priv->rx_cnt = 0;
 
     spi_set_drvdata(spi, priv);
-    pr_info("SPI network device registered 20250601 (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
+    pr_info("SPI network device registered 20250512 (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
     return 0;
 }
 
