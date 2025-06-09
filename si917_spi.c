@@ -322,6 +322,8 @@ static void spi_net_receive_packet2(struct spi_net_priv *priv) {
     //     }
     //     pr_info("\n");
     // }
+    // if (priv->rx_buffer[SI917_SPI_MARGINE+23] == 1)
+        // pr_info ("ping seq : 0x%02x 0x%02x\n", priv->rx_buffer[SI917_SPI_MARGINE+40], priv->rx_buffer[SI917_SPI_MARGINE+41]);
 
     // pr_info("rx:%d\n", len);
     /* 조각 수신 처리 */
