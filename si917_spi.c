@@ -483,6 +483,7 @@ static int spi_thread_fn(void *data) {
             // }
             usleep_range(800, 900);
             wait = gpio_get_value(SI917_IRQ_GPIO);
+
         }
 
         priv->r_cnt = priv->w_cnt = 0;
@@ -490,6 +491,8 @@ static int spi_thread_fn(void *data) {
         if (priv->r_cnt > SPI_BUF_NUM || priv->w_cnt > SPI_BUF_NUM) {
             priv->r_cnt = priv->w_cnt = 0;
         }
+
+        cond_resched();
     }
     return 0;
 }
@@ -626,7 +629,7 @@ static int spi_net_open(struct net_device *dev) {
     priv->spi_thread = kthread_run(spi_thread_fn, priv, "spi_thread");
 
     param.sched_priority = 80; // 1~99 (높을수록 우선순위 높음)
-    if (sched_setscheduler(priv->spi_thread, SCHED_FIFO, &param) != 0) {
+    if (sched_setscheduler(priv->spi_thread, SCHED_RR, &param) != 0) {
         pr_err("Failed to set scheduler policy\n");
     } else {
         pr_info("kthread scheduler set to SCHED_FIFO, priority 80\n");
@@ -742,7 +745,7 @@ static int spi_net_probe(struct spi_device *spi) {
     priv->rx_cnt = 0;
 
     spi_set_drvdata(spi, priv);
-    pr_info("SPI network device registered 20250601 (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
+    pr_info("SPI network device registered 20250610 (buffer size: %d bytes)\n", SPI_MAX_BUF_SIZE);
     return 0;
 }
 
